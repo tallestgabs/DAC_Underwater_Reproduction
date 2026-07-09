@@ -1,0 +1,9 @@
+.venv
+venv 
+
+metrics_results.csv
+
+/output
+/raw-890
+/reference-890
+/teste
