@@ -8,8 +8,8 @@ from skimage.metrics import mean_squared_error
 
 
 # diretorios ----------------------------------------------------
-RAW_DIR = 'raw-890'
-REF_DIR = 'reference-890'
+RAW_DIR = 'UIEB_Raw'
+REF_DIR = 'UIEB_Reference'
 OUTPUT_DIR = 'output/'
 CSV_FILENAME = 'metrics_results.csv'
 
