@@ -4,7 +4,6 @@ import os
 import glob 
 import csv 
 import skimage.metrics
-from skimage.metrics import mean_squared_error
 
 
 # diretorios ----------------------------------------------------
@@ -24,28 +23,25 @@ def dac_implementation(img):
 
     # Define tamanho max para o mean filter
     hight, weight = img.shape[:2]
-    max_size = max(hight, weight)  
+    max_size = max(hight, weight)
 
     # opencv exige que a matriz seja impar
     if max_size % 2 == 0:
         max_size +=1
 
-    # OpenCV le na ordem BGR
-    b_channel, g_channel, r_channel = cv2.split(img)
+    # Separa a imagem em RGB
+    blue_channel, green_channel, red_channel = cv2.split(img)
 
-    # Utiliza CLAHE em cada channel para aumentar constraste da imagem
-    # Arigo omite os valores de limite e tamanho do bloco
-    clahe = cv2.createCLAHE(clipLimit=1.1, tileGridSize=(8,8))   # testar os valores
-    red_enhanced = clahe.apply(r_channel)
-    green_enhanced = clahe.apply(g_channel)
-    blue_enhanced = clahe.apply(b_channel)
+    # Utiliza CLAHE
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))   # testar os valores
+    blue_enhanced = clahe.apply(blue_channel)
+    green_enhanced = clahe.apply(green_channel)
+    red_enhanced = clahe.apply(red_channel)
 
-    # converte para float para manter os valores negativos
-    # artigo tambem nao fala os falores do filtro bilateral
-    r_enhanced = cv2.bilateralFilter(red_enhanced.astype(np.float32), d=9, sigmaColor=75, sigmaSpace=75)
-    g_enhanced = cv2.bilateralFilter(green_enhanced.astype(np.float32), d=9, sigmaColor=75, sigmaSpace=75)
-    b_enhanced = cv2.bilateralFilter(blue_enhanced.astype(np.float32), d=9, sigmaColor=75, sigmaSpace=75)
-
+    # Aplica filtro bilateral para remoção de ruído
+    r_enhanced = cv2.bilateralFilter(red_enhanced, d=9, sigmaColor=15.0, sigmaSpace=10)
+    b_enhanced = cv2.bilateralFilter(blue_enhanced, d=9, sigmaColor=15.0, sigmaSpace=10)
+    g_enhanced = cv2.bilateralFilter(green_enhanced, d=9, sigmaColor=15.0, sigmaSpace=10)
 
     # Separar a Base Layer da Detail Layer de cada canal (R nao vai ter detail layer)
     # mean filter é o cv2.blur
@@ -53,8 +49,8 @@ def dac_implementation(img):
     g_baseLayer = cv2.blur(g_enhanced, (max_size, max_size))
     b_baseLayer = cv2.blur(b_enhanced, (max_size, max_size))
 
-    g_detailLayer = g_enhanced - g_baseLayer
-    b_detailLayer = b_enhanced - b_baseLayer
+    g_detailLayer = cv2.subtract(g_enhanced, g_baseLayer)
+    b_detailLayer = cv2.subtract(b_enhanced, b_baseLayer)
 
     # Criar Detail Layer do canal R a partir da Base Layer R e Detail Layer do G e B  (Criando o R channel completo)
     g_average = np.mean(g_enhanced)
@@ -64,23 +60,19 @@ def dac_implementation(img):
     # r_detailLayer é o r_cp (compensation)
     if(g_average > b_average):
         # verde predominante
-        r_detailLayer = cv2.add(r_baseLayer, g_detailLayer)
+        r_compensation = cv2.add(r_baseLayer, g_detailLayer)
 
     else:
         # azul predominante
-        r_detailLayer = cv2.add(r_baseLayer, b_detailLayer)
-
-
-    # elimina valores negativos antes do gray world
-    r_detailLayer = np.clip(r_detailLayer, 0.0, 255.0)
+        r_compensation = cv2.add(r_baseLayer, b_detailLayer)
 
 
     # Utiliza Gray World Algorithm para corrigir as cores
-    r_average = np.mean(r_detailLayer)
-    gray = (r_average + g_average + b_average) / 3
+    r_average = np.mean(r_compensation)
+    gray = (r_average + g_average + b_average) / 3.0
 
     # K é o scale parameter 
-    k_r = 0.8 * (gray / r_average)   # 0.8 é o valor alfa dado no artigo
+    k_r = 0.7 * (gray / r_average)   # 0.8 é o valor alfa dado no artigo
     k_g = gray / g_average
     k_b = gray / b_average
 
@@ -89,13 +81,12 @@ def dac_implementation(img):
     #print(f"k_r={k_r:.2f} k_g={k_g:.2f} k_b={k_b:.2f}")
 
 
-    r_output = np.clip(k_r * r_detailLayer, 0, 255).astype(np.uint8)
+    r_output = np.clip(k_r * r_compensation, 0, 255).astype(np.uint8)
     # saida do G e B a formula utiliza enhanced
     g_output = np.clip(k_g * g_enhanced, 0, 255).astype(np.uint8)
     b_output = np.clip(k_b * b_enhanced, 0, 255).astype(np.uint8)
 
     # Juntar tudo (BGR)
-    #final_image = cv2.merge((b_output, g_output, r_output))
     final_image = cv2.merge((b_output, g_output, r_output))
 
     return final_image
@@ -138,7 +129,7 @@ for raw_path in image_paths:
 
     # calcula as metricas
     # channel_axis=-1 parametro do scikit-image para avisar que a imagem tem cor
-    mse_value = mean_squared_error(img_ref, processed_image)
+    mse_value = skimage.metrics.mean_squared_error(img_ref, processed_image)
     psnr_value = skimage.metrics.peak_signal_noise_ratio(img_ref, processed_image)
     ssim_value = skimage.metrics.structural_similarity(img_ref, processed_image, channel_axis=-1)
 
