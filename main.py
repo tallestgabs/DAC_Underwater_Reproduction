@@ -32,8 +32,8 @@ def dac_implementation(img):
     # Separa a imagem em RGB
     blue_channel, green_channel, red_channel = cv2.split(img)
 
-    # Utiliza CLAHE
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))   # testar os valores
+    # Utiliza CLAHE 
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))   
     blue_enhanced = clahe.apply(blue_channel)
     green_enhanced = clahe.apply(green_channel)
     red_enhanced = clahe.apply(red_channel)
@@ -49,8 +49,8 @@ def dac_implementation(img):
     g_baseLayer = cv2.blur(g_enhanced, (max_size, max_size))
     b_baseLayer = cv2.blur(b_enhanced, (max_size, max_size))
 
-    g_detailLayer = cv2.subtract(g_enhanced, g_baseLayer)
-    b_detailLayer = cv2.subtract(b_enhanced, b_baseLayer)
+    g_detailLayer = g_enhanced.astype(np.int16) - g_baseLayer.astype(np.int16)
+    b_detailLayer = b_enhanced.astype(np.int16) - b_baseLayer.astype(np.int16)
 
     # Criar Detail Layer do canal R a partir da Base Layer R e Detail Layer do G e B  (Criando o R channel completo)
     g_average = np.mean(g_enhanced)
@@ -60,19 +60,20 @@ def dac_implementation(img):
     # r_detailLayer é o r_cp (compensation)
     if(g_average > b_average):
         # verde predominante
-        r_compensation = cv2.add(r_baseLayer, g_detailLayer)
+        r_compensation = r_baseLayer.astype(np.int16) + g_detailLayer
 
     else:
         # azul predominante
-        r_compensation = cv2.add(r_baseLayer, b_detailLayer)
-
+        r_compensation = r_baseLayer.astype(np.int16) + b_detailLayer
+    
+    r_compensation = np.clip(r_compensation, 0, 255).astype(np.float64)
 
     # Utiliza Gray World Algorithm para corrigir as cores
     r_average = np.mean(r_compensation)
     gray = (r_average + g_average + b_average) / 3.0
 
     # K é o scale parameter 
-    k_r = 0.7 * (gray / r_average)   # 0.8 é o valor alfa dado no artigo
+    k_r = 0.8 * (gray / r_average)
     k_g = gray / g_average
     k_b = gray / b_average
 
@@ -91,8 +92,28 @@ def dac_implementation(img):
 
     return final_image
 
+def calcular_uciqe(img_bgr):
+    """
+    Calcula o UCIQE (Underwater Color Image Quality Evaluation) de uma imagem,
+    sem precisar de imagem de referencia. Formula do artigo (secao 4):
+    UCIQE = c1*sigma_c + c2*con_l + c3*mu_s, calculada em espaco de cor CIELab.
+    """
+    img_lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float64)
+    L = img_lab[:, :, 0] / 255.0
+    a = img_lab[:, :, 1] / 255.0
+    b = img_lab[:, :, 2] / 255.0
 
+    chroma = np.sqrt(a ** 2 + b ** 2)
+    sigma_c = np.std(chroma)
 
+    L_flat = L.flatten()
+    con_l = np.percentile(L_flat, 99) - np.percentile(L_flat, 1)
+
+    saturation = chroma / (np.sqrt(chroma ** 2 + L ** 2) + 1e-8)
+    mu_s = np.mean(saturation)
+
+    c1, c2, c3 = 0.4680, 0.2745, 0.2576
+    return c1 * sigma_c + c2 * con_l + c3 * mu_s
 
 # pega todas as imagens da pasta raw
 image_paths = glob.glob(os.path.join(RAW_DIR, '*.*'))  # aceita png, jpg, etc
@@ -102,6 +123,7 @@ results    = []
 total_mse  = []
 total_psnr = []
 total_ssim = []
+total_uciqe = []
 
 
 print(f"Starting the processing of {len(image_paths)} images =>")
@@ -132,6 +154,7 @@ for raw_path in image_paths:
     mse_value = skimage.metrics.mean_squared_error(img_ref, processed_image)
     psnr_value = skimage.metrics.peak_signal_noise_ratio(img_ref, processed_image)
     ssim_value = skimage.metrics.structural_similarity(img_ref, processed_image, channel_axis=-1)
+    uciqe_value = calcular_uciqe(processed_image)
 
 
     # guarda na memoria
@@ -139,8 +162,9 @@ for raw_path in image_paths:
     total_mse.append(mse_value)
     total_psnr.append(psnr_value)
     total_ssim.append(ssim_value)
+    total_uciqe.append(uciqe_value)
 
-    print(f"{filename}: SUCCESS! | MSE: {mse_value:.2f} | PSNR: {psnr_value:.2f} | SSIM: {ssim_value:.4f}")
+    print(f"{filename}: SUCCESS! | MSE: {mse_value:.2f} | PSNR: {psnr_value:.2f} | SSIM: {ssim_value:.4f} | UCIQE: {uciqe_value:.4f}")
 
 
     # Relatorio Final ---------------------------------------------------------------------------
@@ -149,13 +173,14 @@ if results:
     # Salvar em CSV
     with open(CSV_FILENAME, mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(['File', 'MSE', 'PSNR', 'SSIM'])
+        writer.writerow(['File', 'MSE', 'PSNR', 'SSIM', 'UCIQE'])
         writer.writerows(results)
     
     # Calcular médias
     mean_mse = np.mean(total_mse)
     mean_psnr = np.mean(total_psnr)
     mean_ssim = np.mean(total_ssim)
+    mean_uciqe = np.mean(total_uciqe)
     
     print("\n" + "="*40)
     print("🎯 PROCESSING COMPLETE!")
@@ -164,6 +189,7 @@ if results:
     print(f"FINAL MEAN MSE: {mean_mse:.4f}")
     print(f"FINAL MEAN PSNR: {mean_psnr:.4f}")
     print(f"FINAL MEAN SSIM: {mean_ssim:.4f}")
+    print(f"FINAL MEAN UCIQE: {mean_uciqe:.4f}")
     print(f"Detailed Results Saved On: {CSV_FILENAME}")
 else:
     print("\nNo image was processed. Revise the file paths...")
