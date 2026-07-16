@@ -74,6 +74,7 @@ def dac_implementation(img):
 
     # K é o scale parameter 
     k_r = 0.8 * (gray / r_average)
+    k_r = np.clip(k_r, 0, 1.3)
     k_g = gray / g_average
     k_b = gray / b_average
 
